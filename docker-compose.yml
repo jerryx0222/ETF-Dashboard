@@ -1,0 +1,67 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: etf_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-etf_db}
+      MYSQL_USER: ${MYSQL_USER:-etf_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-etf_password}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3308:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: etf_backend
+    restart: always
+    env_file: .env
+    environment:
+      MYSQL_HOST: db
+      DJANGO_SETTINGS_MODULE: config.settings
+    volumes:
+      - ./backend:/app
+      - static_volume:/app/staticfiles
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --reload --timeout 120 --workers 2"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: etf_frontend
+    restart: always
+    depends_on:
+      - backend
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: etf_nginx
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+      - frontend
+    volumes:
+      - static_volume:/app/staticfiles
+
+volumes:
+  mysql_data:
+  static_volume:
