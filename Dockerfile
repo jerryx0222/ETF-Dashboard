@@ -29,4 +29,6 @@ COPY --from=frontend-builder /frontend/build /app/frontend_build
 # collectstatic is DB-free; dummy SECRET_KEY satisfies Django startup check
 RUN SECRET_KEY=build-time-dummy python manage.py collectstatic --noinput
 
-CMD exec gunicorn config.wsgi:application --bind :${PORT:-8080} --workers 1 --threads 8 --timeout 0
+RUN chmod +x /app/entrypoint.sh
+
+CMD ["/app/entrypoint.sh"]
