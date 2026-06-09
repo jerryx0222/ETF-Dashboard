@@ -1,14 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Layout, Table, Input, Select, Typography, Drawer, Descriptions, Tag, Spin, Space, Button
+  Layout, Table, Input, Select, Typography, Drawer, Descriptions, Tag, Spin, Space, Button,
+  AutoComplete, message
 } from 'antd';
-import { SearchOutlined, PlusOutlined } from '@ant-design/icons';
+import { SearchOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons';
 import api from '../api/axios';
 import ImportModal from './ImportModal';
 
 const { Content } = Layout;
 const { Title } = Typography;
 const { Option } = Select;
+
+const TAIWAN_BANKS = [
+  '台灣銀行', '土地銀行', '合作金庫銀行', '第一銀行', '華南銀行',
+  '彰化銀行', '兆豐銀行', '台灣企銀', '永豐銀行', '玉山銀行',
+  '國泰世華銀行', '台北富邦銀行', '中國信託銀行', '台新銀行',
+  '聯邦銀行', '遠東商銀', '元大銀行', '凱基銀行', '安泰銀行',
+  '星展銀行', '滙豐銀行', '花旗銀行', '渣打銀行', '三信商銀',
+  '京城銀行', '板信商銀', '台中商銀', '高雄銀行', '中華郵政',
+  '農業金庫', '陽信商銀', '大眾商銀', '華泰銀行', '上海商銀',
+  '台灣新光商銀', '日盛銀行', '瑞興銀行', '樂天銀行',
+];
 
 const dividendColumns = [
   { title: '除息日', dataIndex: 'ex_dividend_date', key: 'ex_dividend_date' },
@@ -31,6 +43,9 @@ export default function StockInfo() {
   const [selected, setSelected] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [editingBank, setEditingBank] = useState(false);
+  const [bankInput, setBankInput] = useState('');
+  const [bankSaving, setBankSaving] = useState(false);
 
   useEffect(() => {
     fetchETFs();
@@ -55,9 +70,26 @@ export default function StockInfo() {
     try {
       const res = await api.get(`/etfs/${record.id}/`);
       setSelected(res.data);
+      setEditingBank(false);
+      setBankInput(res.data.dividend_bank || '');
       setDrawerOpen(true);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const saveBank = async () => {
+    setBankSaving(true);
+    try {
+      await api.patch(`/etfs/${selected.id}/`, { dividend_bank: bankInput });
+      setSelected(prev => ({ ...prev, dividend_bank: bankInput }));
+      setEditingBank(false);
+      fetchETFs();
+      message.success('配息銀行已更新');
+    } catch (err) {
+      message.error('儲存失敗');
+    } finally {
+      setBankSaving(false);
     }
   };
 
@@ -127,7 +159,7 @@ export default function StockInfo() {
         <Drawer
           title={selected ? `${selected.securities_code} ${selected.securities_abbreviation}` : ''}
           open={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
+          onClose={() => { setDrawerOpen(false); setEditingBank(false); }}
           width={640}
         >
           {selected && (
@@ -144,7 +176,29 @@ export default function StockInfo() {
                     {selected.dividend_frequency_display}
                   </Tag>
                 </Descriptions.Item>
-                <Descriptions.Item label="配息銀行">{selected.dividend_bank}</Descriptions.Item>
+                <Descriptions.Item label="配息銀行">
+                  {editingBank ? (
+                    <Space>
+                      <AutoComplete
+                        value={bankInput}
+                        onChange={setBankInput}
+                        options={TAIWAN_BANKS
+                          .filter(b => !bankInput || b.includes(bankInput))
+                          .map(b => ({ value: b }))}
+                        style={{ width: 200 }}
+                        placeholder="輸入關鍵字搜尋"
+                        autoFocus
+                      />
+                      <Button type="primary" size="small" loading={bankSaving} onClick={saveBank}>儲存</Button>
+                      <Button size="small" onClick={() => { setEditingBank(false); setBankInput(selected.dividend_bank || ''); }}>取消</Button>
+                    </Space>
+                  ) : (
+                    <Space>
+                      <span>{selected.dividend_bank || '-'}</span>
+                      <Button type="link" size="small" icon={<EditOutlined />} onClick={() => setEditingBank(true)} />
+                    </Space>
+                  )}
+                </Descriptions.Item>
               </Descriptions>
               <Title level={5}>歷史配息紀錄</Title>
               <Table
