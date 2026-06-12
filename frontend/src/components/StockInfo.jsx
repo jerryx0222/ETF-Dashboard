@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
   Layout, Table, Input, Select, Typography, Drawer, Descriptions, Tag, Spin, Space, Button,
-  AutoComplete, message
+  AutoComplete, message, Popconfirm
 } from 'antd';
-import { SearchOutlined, PlusOutlined, EditOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons';
+import { SearchOutlined, PlusOutlined, EditOutlined, DownloadOutlined, FileExcelOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import api from '../api/axios';
 import ImportModal from './ImportModal';
@@ -23,21 +23,6 @@ const TAIWAN_BANKS = [
   '台灣新光商銀', '日盛銀行', '瑞興銀行', '樂天銀行',
 ];
 
-const dividendColumns = [
-  { title: '除息日', dataIndex: 'ex_dividend_date', key: 'ex_dividend_date' },
-  { title: '配息金額 (元)', dataIndex: 'dividend_amount', key: 'dividend_amount' },
-  { title: '除息日收盤價 (元)', dataIndex: 'closing_price', key: 'closing_price' },
-  {
-    title: '現金殖利率',
-    key: 'yield',
-    render: (_, row) => {
-      const price = parseFloat(row.closing_price);
-      const amount = parseFloat(row.dividend_amount);
-      if (!price) return '-';
-      return `${((amount / price) * 100).toFixed(2)}%`;
-    },
-  },
-];
 
 const frequencyColors = {
   monthly: 'blue',
@@ -57,7 +42,15 @@ export default function StockInfo() {
   const [editingBank, setEditingBank] = useState(false);
   const [bankInput, setBankInput] = useState('');
   const [bankSaving, setBankSaving] = useState(false);
+  const [editingHoldings, setEditingHoldings] = useState(false);
+  const [holdingsInput, setHoldingsInput] = useState(0);
+  const [holdingsSaving, setHoldingsSaving] = useState(false);
+  const [latestPriceImporting, setLatestPriceImporting] = useState(false);
   const [dividendImporting, setDividendImporting] = useState(false);
+  const [allDividendImporting, setAllDividendImporting] = useState(false);
+  const [selectedEtfKeys, setSelectedEtfKeys] = useState([]);
+  const [removing, setRemoving] = useState(false);
+  const [totalIncome, setTotalIncome] = useState(null);
 
   useEffect(() => {
     fetchETFs();
@@ -71,6 +64,7 @@ export default function StockInfo() {
       if (frequencyFilter) params.dividend_frequency = frequencyFilter;
       const res = await api.get('/etfs/', { params });
       setEtfs(res.data.results || res.data);
+      setTotalIncome(res.data.total_income ?? null);
     } catch (err) {
       console.error(err);
     } finally {
@@ -84,6 +78,8 @@ export default function StockInfo() {
       setSelected(res.data);
       setEditingBank(false);
       setBankInput(res.data.dividend_bank || '');
+      setEditingHoldings(false);
+      setHoldingsInput(res.data.holdings || 0);
       setDrawerOpen(true);
     } catch (err) {
       console.error(err);
@@ -113,13 +109,121 @@ export default function StockInfo() {
     setDividendImporting(true);
     try {
       const res = await api.post(`/etfs/${selected.id}/import_dividends/`);
-      message.success(`匯入完成：新增 ${res.data.created} 筆，更新 ${res.data.updated} 筆`);
+      message.success(`匯入完成：新增 ${res.data.created} 筆，略過 ${res.data.skipped} 筆`);
       const detail = await api.get(`/etfs/${selected.id}/`);
       setSelected(detail.data);
     } catch (err) {
       message.error(err.response?.data?.error || '匯入失敗');
     } finally {
       setDividendImporting(false);
+    }
+  };
+
+  const deleteDividend = async (id) => {
+    try {
+      await api.delete(`/dividends/${id}/`);
+      message.success('已刪除');
+      const detail = await api.get(`/etfs/${selected.id}/`);
+      setSelected(detail.data);
+    } catch (err) {
+      message.error('刪除失敗');
+    }
+  };
+
+  const dividendColumns = [
+    { title: '除息日', dataIndex: 'ex_dividend_date', key: 'ex_dividend_date' },
+    { title: '配息金額 (元)', dataIndex: 'dividend_amount', key: 'dividend_amount' },
+    { title: '除息日收盤價 (元)', dataIndex: 'closing_price', key: 'closing_price' },
+    {
+      title: '現金殖利率',
+      key: 'yield',
+      render: (_, row) => {
+        const price = parseFloat(row.closing_price);
+        const amount = parseFloat(row.dividend_amount);
+        if (!price) return '-';
+        return `${((amount / price) * 100).toFixed(2)}%`;
+      },
+    },
+    {
+      title: '',
+      key: 'action',
+      width: 60,
+      render: (_, row) => (
+        <Popconfirm
+          title="確定刪除此筆配息紀錄？"
+          onConfirm={() => deleteDividend(row.id)}
+          okText="刪除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+        >
+          <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+        </Popconfirm>
+      ),
+    },
+  ];
+
+  const removeEtfs = async () => {
+    setRemoving(true);
+    try {
+      await Promise.all(selectedEtfKeys.map(id => api.delete(`/etfs/${id}/`)));
+      message.success(`已移除 ${selectedEtfKeys.length} 筆`);
+      setSelectedEtfKeys([]);
+      fetchETFs();
+    } catch (err) {
+      message.error('移除失敗');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  const saveHoldings = async () => {
+    setHoldingsSaving(true);
+    try {
+      await api.patch(`/etfs/${selected.id}/`, { holdings: holdingsInput });
+      setSelected(prev => ({ ...prev, holdings: holdingsInput }));
+      setEditingHoldings(false);
+      fetchETFs();
+      message.success('存量已更新');
+    } catch (err) {
+      message.error('儲存失敗');
+    } finally {
+      setHoldingsSaving(false);
+    }
+  };
+
+  const importLatestPrices = async () => {
+    setLatestPriceImporting(true);
+    try {
+      const res = await api.post('/etfs/import_latest_prices/');
+      const { updated, errors } = res.data;
+      if (errors?.length) {
+        message.warning(`更新 ${updated} 筆，${errors.length} 檔失敗：${errors.join(', ')}`);
+      } else {
+        message.success(`已更新 ${updated} 筆最新股價`);
+      }
+      fetchETFs();
+    } catch (err) {
+      message.error('匯入失敗');
+    } finally {
+      setLatestPriceImporting(false);
+    }
+  };
+
+  const importAllDividends = async () => {
+    setAllDividendImporting(true);
+    try {
+      const res = await api.post('/etfs/import_all_dividends/');
+      const { created, skipped, errors } = res.data;
+      if (errors?.length) {
+        message.warning(`新增 ${created} 筆，略過 ${skipped} 筆，${errors.length} 檔失敗：${errors.join(', ')}`);
+      } else {
+        message.success(`全部匯入完成：新增 ${created} 筆，略過 ${skipped} 筆`);
+      }
+      fetchETFs();
+    } catch (err) {
+      message.error(err.response?.data?.error || '匯入失敗');
+    } finally {
+      setAllDividendImporting(false);
     }
   };
 
@@ -141,13 +245,14 @@ export default function StockInfo() {
   const columns = [
     { title: '證券代號', dataIndex: 'securities_code', key: 'securities_code', width: 100 },
     { title: '證券簡稱', dataIndex: 'securities_abbreviation', key: 'securities_abbreviation', width: 150 },
-    { title: '發行人', dataIndex: 'issuer', key: 'issuer', width: 150 },
     { title: '標的指數', dataIndex: 'target_index', key: 'target_index', ellipsis: true },
     {
       title: <span style={{ color: '#ff4d4f' }}>年化現金殖利率</span>,
       dataIndex: 'annualized_yield',
       key: 'annualized_yield',
       width: 140,
+      sorter: (a, b) => (a.annualized_yield ?? -1) - (b.annualized_yield ?? -1),
+      defaultSortOrder: 'descend',
       render: (val) => val != null ? <span style={{ color: '#ff4d4f' }}>{val.toFixed(2)}%</span> : '',
     },
     { title: '經理費(%)', dataIndex: 'management_fee', key: 'management_fee', width: 100 },
@@ -162,6 +267,33 @@ export default function StockInfo() {
       ),
     },
     { title: '配息銀行', dataIndex: 'dividend_bank', key: 'dividend_bank', width: 130 },
+    {
+      title: '最新股價',
+      dataIndex: 'latest_price',
+      key: 'latest_price',
+      width: 100,
+      render: (val) => val != null ? `$${parseFloat(val).toFixed(2)}` : '-',
+    },
+    {
+      title: '存量(股)',
+      dataIndex: 'holdings',
+      key: 'holdings',
+      width: 100,
+      render: (val) => val ? val.toLocaleString() : '-',
+    },
+    {
+      title: '收益(元)',
+      key: 'income',
+      width: 110,
+      render: (_, row) => {
+        const price = parseFloat(row.latest_price);
+        const holdings = parseInt(row.holdings);
+        const yieldRate = row.annualized_yield;
+        if (!price || !holdings || !yieldRate) return '-';
+        const income = holdings * price * yieldRate / 100;
+        return <span style={{ color: '#389e0d' }}>{income.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}</span>;
+      },
+    },
   ];
 
   return (
@@ -196,6 +328,38 @@ export default function StockInfo() {
           >
             新增
           </Button>
+          <Popconfirm
+            title={`確定移除所選 ${selectedEtfKeys.length} 筆 ETF？`}
+            description="相關配息紀錄也會一併刪除"
+            onConfirm={removeEtfs}
+            okText="移除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            disabled={!selectedEtfKeys.length}
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              loading={removing}
+              disabled={!selectedEtfKeys.length}
+            >
+              移除{selectedEtfKeys.length > 0 ? ` (${selectedEtfKeys.length})` : ''}
+            </Button>
+          </Popconfirm>
+          <Button
+            icon={<SyncOutlined />}
+            loading={latestPriceImporting}
+            onClick={importLatestPrices}
+          >
+            匯入最新股價
+          </Button>
+          <Button
+            icon={<SyncOutlined />}
+            loading={allDividendImporting}
+            onClick={importAllDividends}
+          >
+            匯入全部歷史配息紀錄
+          </Button>
         </Space>
         <Spin spinning={loading}>
           <Table
@@ -205,6 +369,24 @@ export default function StockInfo() {
             onRow={record => ({ onClick: () => openDetail(record), style: { cursor: 'pointer' } })}
             pagination={{ pageSize: 20, showSizeChanger: false }}
             scroll={{ x: 900 }}
+            rowSelection={{
+              selectedRowKeys: selectedEtfKeys,
+              onChange: setSelectedEtfKeys,
+            }}
+            summary={() => (
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0} colSpan={11} align="right">
+                  <strong>收益合計</strong>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={12}>
+                  <span style={{ color: '#389e0d', fontWeight: 'bold' }}>
+                    {totalIncome != null
+                      ? `$${Number(totalIncome).toLocaleString('zh-TW', { maximumFractionDigits: 0 })}`
+                      : '-'}
+                  </span>
+                </Table.Summary.Cell>
+              </Table.Summary.Row>
+            )}
           />
         </Spin>
 
@@ -248,6 +430,30 @@ export default function StockInfo() {
                     <Space>
                       <span>{selected.dividend_bank || '-'}</span>
                       <Button type="link" size="small" icon={<EditOutlined />} onClick={() => setEditingBank(true)} />
+                    </Space>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="最新股價">
+                  {selected.latest_price != null ? `$${parseFloat(selected.latest_price).toFixed(2)}` : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="存量(股)">
+                  {editingHoldings ? (
+                    <Space>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={holdingsInput}
+                        onChange={e => setHoldingsInput(parseInt(e.target.value) || 0)}
+                        style={{ width: 140 }}
+                        autoFocus
+                      />
+                      <Button type="primary" size="small" loading={holdingsSaving} onClick={saveHoldings}>儲存</Button>
+                      <Button size="small" onClick={() => { setEditingHoldings(false); setHoldingsInput(selected.holdings || 0); }}>取消</Button>
+                    </Space>
+                  ) : (
+                    <Space>
+                      <span>{selected.holdings ? selected.holdings.toLocaleString() : '0'}</span>
+                      <Button type="link" size="small" icon={<EditOutlined />} onClick={() => setEditingHoldings(true)} />
                     </Space>
                   )}
                 </Descriptions.Item>

@@ -210,6 +210,148 @@ def fetch_twse_etfs():
     return [dict(item) for item in ETF_DATA]
 
 
+def fetch_tpex_etfs():
+    """從櫃買中心 POST API 抓取上櫃 ETF 清單"""
+    import requests
+    import time
+
+    url = "https://www.tpex.org.tw/www/zh-tw/ETF/list"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": "https://www.tpex.org.tw",
+        "Referer": "https://www.tpex.org.tw/zh-tw/product/etf/product/domestic.html",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    categories = ["domestic", "foreign", "bond", "multi"]
+    freq_map = {"月": "monthly", "季": "quarterly", "半年": "semi_annual", "年": "annual"}
+    all_results = []
+    seen_codes = set()
+
+    def parse_freq(text):
+        for key, val in freq_map.items():
+            if key in str(text):
+                return val
+        return "annual"
+
+    session = requests.Session()
+    session.headers.update(headers)
+    try:
+        session.get("https://www.tpex.org.tw/zh-tw/product/etf/product/domestic.html", timeout=15)
+    except Exception:
+        pass
+
+    errors = []
+    for category in categories:
+        try:
+            payload = {"type": category, "id": "", "response": "json"}
+            resp = session.post(url, data=payload, timeout=30)
+            if resp.status_code != 200:
+                errors.append(f"{category}: HTTP {resp.status_code}")
+                continue
+            if not resp.text.strip():
+                errors.append(f"{category}: 回應空白")
+                continue
+            try:
+                data = resp.json()
+            except Exception:
+                errors.append(f"{category}: 非 JSON")
+                continue
+
+            if data.get("stat") != "ok":
+                errors.append(f"{category}: stat={data.get('stat')}")
+                continue
+
+            for table in data.get("tables") or []:
+                for row in table.get("data") or []:
+                    if not row or len(row) < 2:
+                        continue
+                    code = str(row[0]).strip()
+                    name = str(row[1]).strip()
+                    if not code or not name or code in seen_codes:
+                        continue
+                    seen_codes.add(code)
+                    all_results.append({
+                        "securities_code": code,
+                        "securities_abbreviation": name,
+                        "issuer": "",
+                        "target_index": "",
+                        "management_fee": 0,
+                        "custody_fee": 0,
+                        "dividend_frequency": "annual",
+                        "dividend_bank": "",
+                    })
+
+            # 支援多種回應格式
+            if isinstance(data, list):
+                items = data
+            else:
+                items = (data.get("aaData") or data.get("data") or
+                         data.get("list") or data.get("items") or [])
+
+            for item in items:
+                if isinstance(item, dict):
+                    code = str(item.get("code") or item.get("stk_code") or
+                               item.get("securities_code") or "").strip()
+                    name = str(item.get("name") or item.get("stk_name") or
+                               item.get("short_name") or "").strip()
+                    issuer = str(item.get("issuer") or item.get("company") or "").strip()
+                    index  = str(item.get("index") or item.get("target_index") or "").strip()
+                    mgmt_fee = 0
+                    try:
+                        mgmt_fee = float(str(item.get("managementFee") or
+                                             item.get("management_fee") or 0).replace("%", ""))
+                    except Exception:
+                        pass
+                    freq_str = str(item.get("dividendFreq") or item.get("frequency") or "")
+                elif isinstance(item, list) and len(item) >= 2:
+                    # DataTables 陣列格式
+                    code = str(item[0]).strip()
+                    name = str(item[1]).strip()
+                    issuer = str(item[2]).strip() if len(item) > 2 else ""
+                    index  = str(item[3]).strip() if len(item) > 3 else ""
+                    mgmt_fee = 0
+                    try:
+                        mgmt_fee = float(str(item[4]).replace("%", "").strip())
+                    except Exception:
+                        pass
+                    freq_str = str(item[5]) if len(item) > 5 else ""
+                else:
+                    continue
+
+                if not code or not name or code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                all_results.append({
+                    "securities_code": code,
+                    "securities_abbreviation": name,
+                    "issuer": issuer,
+                    "target_index": index,
+                    "management_fee": mgmt_fee,
+                    "custody_fee": 0,
+                    "dividend_frequency": parse_freq(freq_str),
+                    "dividend_bank": "",
+                })
+
+            time.sleep(0.5)
+
+        except Exception as e:
+            errors.append(f"{category}: {e}")
+            continue
+
+    if not all_results:
+        raise Exception(f"無法從櫃買中心取得 ETF 清單。診斷：{'; '.join(errors) or '無資料'}")
+
+    return all_results
+
+
 def _parse_roc_date(date_str):
     """民國年日期 '115年01月22日' → datetime.date"""
     import re
@@ -317,6 +459,46 @@ def _fetch_twse_prices(securities_code, dates):
             pass
 
     return price_map
+
+
+def fetch_latest_price(securities_code):
+    """取得 ETF 最近一個交易日收盤價"""
+    from datetime import date
+    import requests
+    import time
+
+    today = date.today()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+    }
+
+    for months_back in range(3):
+        month = today.month - months_back
+        year = today.year
+        while month <= 0:
+            month += 12
+            year -= 1
+        query_date = date(year, month, 1).strftime("%Y%m%d")
+        try:
+            resp = requests.get(
+                "https://www.twse.com.tw/exchangeReport/STOCK_DAY",
+                params={"response": "json", "date": query_date, "stockNo": securities_code},
+                headers=headers,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("stat") == "OK" and data.get("data"):
+                last_row = data["data"][-1]
+                return round(float(last_row[6].replace(",", "")), 2)
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return None
 
 
 def fetch_etf_dividends(securities_code, years=10):

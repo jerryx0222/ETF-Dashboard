@@ -10,5 +10,6 @@ urlpatterns = [
     path('', include(router.urls)),
     path('export/excel/', views.export_etf_excel, name='export-excel'),
     path('twse/list/', views.twse_etf_list, name='twse-etf-list'),
+    path('tpex/list/', views.tpex_etf_list, name='tpex-etf-list'),
     path('twse/import/', views.import_etfs, name='twse-import'),
 ]

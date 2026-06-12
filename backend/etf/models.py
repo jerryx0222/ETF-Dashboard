@@ -17,6 +17,8 @@ class ETF(models.Model):
     custody_fee = models.DecimalField('保管費(%)', max_digits=6, decimal_places=4)
     dividend_frequency = models.CharField('配息頻率', max_length=20, choices=DIVIDEND_FREQUENCY_CHOICES)
     dividend_bank = models.CharField('配息銀行', max_length=100)
+    latest_price = models.DecimalField('最新股價', max_digits=10, decimal_places=2, null=True, blank=True, default=None)
+    holdings = models.PositiveIntegerField('存量(股)', default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

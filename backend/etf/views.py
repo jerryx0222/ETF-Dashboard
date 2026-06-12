@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import ETF, DividendRecord
 from .serializers import ETFSerializer, ETFListSerializer, DividendRecordSerializer
-from .twse import fetch_twse_etfs, fetch_etf_dividends
+from .twse import fetch_twse_etfs, fetch_tpex_etfs, fetch_etf_dividends, fetch_latest_price
 
 
 class ETFViewSet(viewsets.ModelViewSet):
@@ -21,6 +21,82 @@ class ETFViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return ETFListSerializer
         return ETFSerializer
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = ETFListSerializer(queryset, many=True)
+        data = serializer.data
+
+        total_income = 0
+        for item in data:
+            holdings = item.get('holdings') or 0
+            price = float(item.get('latest_price') or 0)
+            yield_rate = item.get('annualized_yield')
+            if holdings and price and yield_rate:
+                total_income += holdings * price * yield_rate / 100
+
+        return Response({'results': data, 'total_income': round(total_income, 0)})
+
+    @action(detail=False, methods=['post'], url_path='import_latest_prices')
+    def import_latest_prices(self, request):
+        etfs = ETF.objects.all()
+        updated, errors = 0, []
+
+        for etf in etfs:
+            try:
+                price = fetch_latest_price(etf.securities_code)
+                if price is not None:
+                    etf.latest_price = price
+                    etf.save(update_fields=['latest_price', 'updated_at'])
+                    updated += 1
+            except Exception:
+                errors.append(etf.securities_code)
+
+        return Response({'updated': updated, 'errors': errors})
+
+    @action(detail=False, methods=['post'], url_path='import_all_dividends')
+    def import_all_dividends(self, request):
+        from datetime import date
+        today = date.today()
+        etfs = ETF.objects.prefetch_related('dividend_records').all()
+        total_created, total_skipped = 0, 0
+        errors = []
+
+        for etf in etfs:
+            last_record = etf.dividend_records.order_by('-ex_dividend_date').first()
+            last_date = last_record.ex_dividend_date if last_record else None
+
+            try:
+                records = fetch_etf_dividends(etf.securities_code)
+            except Exception as e:
+                errors.append(etf.securities_code)
+                continue
+
+            for rec in records:
+                ex_date = rec['ex_dividend_date']
+                if ex_date > today:
+                    continue
+                if last_date and ex_date <= last_date:
+                    total_skipped += 1
+                    continue
+                _, was_created = DividendRecord.objects.get_or_create(
+                    etf=etf,
+                    ex_dividend_date=ex_date,
+                    defaults={
+                        'dividend_amount': rec['dividend_amount'],
+                        'closing_price': rec['closing_price'],
+                    },
+                )
+                if was_created:
+                    total_created += 1
+                else:
+                    total_skipped += 1
+
+        return Response({
+            'created': total_created,
+            'skipped': total_skipped,
+            'errors': errors,
+        })
 
     @action(detail=True, methods=['post'], url_path='import_dividends')
     def import_dividends(self, request, pk=None):
@@ -36,9 +112,9 @@ class ETFViewSet(viewsets.ModelViewSet):
         if not records:
             return Response({'error': '未從 TWSE 取得配息資料'}, status=status.HTTP_404_NOT_FOUND)
 
-        created, updated = 0, 0
+        created, skipped = 0, 0
         for rec in records:
-            _, was_created = DividendRecord.objects.update_or_create(
+            _, was_created = DividendRecord.objects.get_or_create(
                 etf=etf,
                 ex_dividend_date=rec['ex_dividend_date'],
                 defaults={
@@ -49,9 +125,9 @@ class ETFViewSet(viewsets.ModelViewSet):
             if was_created:
                 created += 1
             else:
-                updated += 1
+                skipped += 1
 
-        return Response({'created': created, 'updated': updated, 'total': len(records)})
+        return Response({'created': created, 'skipped': skipped, 'total': len(records)})
 
 
 class DividendRecordViewSet(viewsets.ModelViewSet):
@@ -115,6 +191,18 @@ def export_etf_excel(request):
 def twse_etf_list(request):
     try:
         etfs = fetch_twse_etfs()
+        existing = set(ETF.objects.values_list('securities_code', flat=True))
+        for etf in etfs:
+            etf['already_imported'] = etf['securities_code'] in existing
+        return Response(etfs)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+@api_view(['GET'])
+def tpex_etf_list(request):
+    try:
+        etfs = fetch_tpex_etfs()
         existing = set(ETF.objects.values_list('securities_code', flat=True))
         for etf in etfs:
             etf['already_imported'] = etf['securities_code'] in existing

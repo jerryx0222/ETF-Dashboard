@@ -25,6 +25,8 @@ class ETFSerializer(serializers.ModelSerializer):
             'dividend_frequency',
             'dividend_frequency_display',
             'dividend_bank',
+            'latest_price',
+            'holdings',
             'dividend_records',
             'created_at',
             'updated_at',
@@ -48,6 +50,8 @@ class ETFListSerializer(serializers.ModelSerializer):
             'dividend_frequency',
             'dividend_frequency_display',
             'dividend_bank',
+            'latest_price',
+            'holdings',
             'annualized_yield',
         ]
 
