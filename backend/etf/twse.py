@@ -208,3 +208,130 @@ ETF_DATA = [
 
 def fetch_twse_etfs():
     return [dict(item) for item in ETF_DATA]
+
+
+def _parse_roc_date(date_str):
+    """民國年日期 '115年01月22日' → datetime.date"""
+    import re
+    from datetime import date
+    m = re.match(r'(\d+)年(\d+)月(\d+)日', date_str or '')
+    if not m:
+        return None
+    return date(int(m.group(1)) + 1911, int(m.group(2)), int(m.group(3)))
+
+
+def _fetch_twse_dividend_dates(securities_code, years):
+    """TWSE rwd ETF API: 取得除息日 + 配息金額"""
+    import time
+    import requests
+    from datetime import date
+
+    today = date.today()
+    start_date = date(today.year - years, today.month, today.day)
+
+    url = "https://www.twse.com.tw/rwd/zh/ETF/etfDiv"
+    params = {
+        "response": "json",
+        "stockNo": securities_code,
+        "startDate": start_date.strftime("%Y%m%d"),
+        "endDate": today.strftime("%Y%m%d"),
+    }
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.twse.com.tw/zh/ETF/dividend",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+    }
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except Exception as e:
+            last_err = e
+            time.sleep(3 * (attempt + 1))
+    else:
+        raise last_err
+
+    # fields: [證券代號, 證券簡稱, 除息交易日, 基準日, 發放日, 配息金額, 說明, 年度]
+    results = []
+    for row in data.get("data") or []:
+        if row[0] != securities_code:
+            continue
+        ex_date = _parse_roc_date(row[2])
+        if not ex_date:
+            continue
+        try:
+            amount = round(float(row[5] or 0), 4)
+        except (ValueError, TypeError):
+            amount = 0
+        results.append({"ex_dividend_date": ex_date, "dividend_amount": amount})
+    return results
+
+
+def _fetch_twse_prices(securities_code, dates):
+    """TWSE STOCK_DAY API: 批次取得指定日期的收盤價，以 (year, month) 分組"""
+    import time
+    import requests
+    from datetime import date
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+    }
+    price_map = {}
+    needed_months = sorted({(d.year, d.month) for d in dates})
+
+    for year, month in needed_months:
+        try:
+            query_date = date(year, month, 1).strftime("%Y%m%d")
+            resp = requests.get(
+                "https://www.twse.com.tw/exchangeReport/STOCK_DAY",
+                params={"response": "json", "date": query_date, "stockNo": securities_code},
+                headers=headers,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("stat") != "OK":
+                continue
+            # fields: [日期(115/01/02), 成交股數, 成交金額, 開盤價, 最高價, 最低價, 收盤價, ...]
+            for row in data.get("data", []):
+                try:
+                    parts = row[0].split("/")
+                    row_date = date(int(parts[0]) + 1911, int(parts[1]), int(parts[2]))
+                    price_map[row_date] = float(row[6].replace(",", ""))
+                except (ValueError, IndexError):
+                    pass
+            time.sleep(0.3)
+        except Exception:
+            pass
+
+    return price_map
+
+
+def fetch_etf_dividends(securities_code, years=10):
+    dividends = _fetch_twse_dividend_dates(securities_code, years)
+    if not dividends:
+        return []
+
+    dates = [d["ex_dividend_date"] for d in dividends]
+    price_map = _fetch_twse_prices(securities_code, dates)
+
+    return [
+        {
+            "ex_dividend_date": d["ex_dividend_date"],
+            "dividend_amount": d["dividend_amount"],
+            "closing_price": round(price_map.get(d["ex_dividend_date"], 0), 2),
+        }
+        for d in dividends
+    ]

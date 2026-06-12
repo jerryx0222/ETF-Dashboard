@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Modal, Table, Input, Button, Space, Tag, Alert,
+  Modal, Table, Input, Button, Space, Alert,
   Typography, Tooltip, Badge
 } from 'antd';
 import { SearchOutlined, ImportOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -41,10 +41,12 @@ export default function ImportModal({ open, onClose, onImported }) {
   }, [open, fetchList]);
 
   const filtered = data.filter(item =>
-    !search ||
-    item.securities_code.includes(search) ||
-    item.securities_abbreviation.includes(search) ||
-    (item.issuer || '').includes(search)
+    !item.already_imported && (
+      !search ||
+      item.securities_code.includes(search) ||
+      item.securities_abbreviation.includes(search) ||
+      (item.issuer || '').includes(search)
+    )
   );
 
   const handleImport = async () => {
@@ -99,17 +101,7 @@ export default function ImportModal({ open, onClose, onImported }) {
         return map[v] || '—';
       },
     },
-    {
-      title: '狀態',
-      dataIndex: 'already_imported',
-      width: 80,
-      render: (v) => v
-        ? <Tag color="green">已匯入</Tag>
-        : <Tag color="blue">未匯入</Tag>,
-    },
   ];
-
-  const notImported = filtered.filter(d => !d.already_imported);
 
   return (
     <Modal
@@ -125,8 +117,7 @@ export default function ImportModal({ open, onClose, onImported }) {
       footer={
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Text type="secondary">
-            已選 {selectedKeys.length} 筆
-            {notImported.length > 0 && `，未匯入共 ${notImported.length} 筆`}
+            已選 {selectedKeys.length} 筆，共 {filtered.length} 筆未匯入
           </Text>
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchList} loading={loading}>
@@ -179,9 +170,7 @@ export default function ImportModal({ open, onClose, onImported }) {
           onChange: setSelectedKeys,
           getCheckboxProps: () => ({}),
         }}
-        rowClassName={record => record.already_imported ? 'row-imported' : ''}
       />
-      <style>{`.row-imported td { opacity: 0.55; }`}</style>
     </Modal>
   );
 }

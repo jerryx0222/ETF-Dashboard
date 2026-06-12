@@ -2,16 +2,16 @@ import io
 import openpyxl
 from django.http import HttpResponse
 from rest_framework import viewsets, filters, status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import ETF, DividendRecord
 from .serializers import ETFSerializer, ETFListSerializer, DividendRecordSerializer
-from .twse import fetch_twse_etfs
+from .twse import fetch_twse_etfs, fetch_etf_dividends
 
 
 class ETFViewSet(viewsets.ModelViewSet):
-    queryset = ETF.objects.all()
+    queryset = ETF.objects.prefetch_related('dividend_records').all()
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['dividend_frequency', 'issuer']
     search_fields = ['securities_code', 'securities_abbreviation', 'issuer']
@@ -21,6 +21,37 @@ class ETFViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return ETFListSerializer
         return ETFSerializer
+
+    @action(detail=True, methods=['post'], url_path='import_dividends')
+    def import_dividends(self, request, pk=None):
+        etf = self.get_object()
+        try:
+            records = fetch_etf_dividends(etf.securities_code)
+        except Exception as e:
+            msg = str(e)
+            if 'rate' in msg.lower() or '429' in msg:
+                msg = 'Yahoo Finance 請求次數過多，請稍候 30 秒再試'
+            return Response({'error': msg}, status=status.HTTP_502_BAD_GATEWAY)
+
+        if not records:
+            return Response({'error': '未從 TWSE 取得配息資料'}, status=status.HTTP_404_NOT_FOUND)
+
+        created, updated = 0, 0
+        for rec in records:
+            _, was_created = DividendRecord.objects.update_or_create(
+                etf=etf,
+                ex_dividend_date=rec['ex_dividend_date'],
+                defaults={
+                    'dividend_amount': rec['dividend_amount'],
+                    'closing_price': rec['closing_price'],
+                },
+            )
+            if was_created:
+                created += 1
+            else:
+                updated += 1
+
+        return Response({'created': created, 'updated': updated, 'total': len(records)})
 
 
 class DividendRecordViewSet(viewsets.ModelViewSet):

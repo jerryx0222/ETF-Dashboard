@@ -8,7 +8,8 @@
     "react-router-dom": "^6.24.0",
     "axios": "^1.7.2",
     "antd": "^5.19.0",
-    "@ant-design/icons": "^5.3.7"
+    "@ant-design/icons": "^5.3.7",
+    "xlsx": "^0.18.5"
   },
   "scripts": {
     "start": "react-scripts start",

@@ -33,6 +33,7 @@ class ETFSerializer(serializers.ModelSerializer):
 
 class ETFListSerializer(serializers.ModelSerializer):
     dividend_frequency_display = serializers.CharField(source='get_dividend_frequency_display', read_only=True)
+    annualized_yield = serializers.SerializerMethodField()
 
     class Meta:
         model = ETF
@@ -47,4 +48,27 @@ class ETFListSerializer(serializers.ModelSerializer):
             'dividend_frequency',
             'dividend_frequency_display',
             'dividend_bank',
+            'annualized_yield',
         ]
+
+    def get_annualized_yield(self, obj):
+        from datetime import date
+        current_year = date.today().year
+        target_years = set(range(current_year - 5, current_year))  # 5 complete years before this year
+
+        yearly_yields = {}
+        for record in obj.dividend_records.all():
+            year = record.ex_dividend_date.year
+            if year not in target_years:
+                continue
+            price = float(record.closing_price or 0)
+            if price == 0:
+                continue
+            yearly_yields[year] = yearly_yields.get(year, 0) + float(record.dividend_amount) / price
+
+        if len(yearly_yields) < 5:
+            return None
+        if any(v == 0 for v in yearly_yields.values()):
+            return None
+
+        return round(sum(yearly_yields.values()) / 5 * 100, 2)

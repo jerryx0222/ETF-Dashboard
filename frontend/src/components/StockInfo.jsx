@@ -3,7 +3,8 @@ import {
   Layout, Table, Input, Select, Typography, Drawer, Descriptions, Tag, Spin, Space, Button,
   AutoComplete, message
 } from 'antd';
-import { SearchOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons';
+import { SearchOutlined, PlusOutlined, EditOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons';
+import * as XLSX from 'xlsx';
 import api from '../api/axios';
 import ImportModal from './ImportModal';
 
@@ -26,6 +27,16 @@ const dividendColumns = [
   { title: '除息日', dataIndex: 'ex_dividend_date', key: 'ex_dividend_date' },
   { title: '配息金額 (元)', dataIndex: 'dividend_amount', key: 'dividend_amount' },
   { title: '除息日收盤價 (元)', dataIndex: 'closing_price', key: 'closing_price' },
+  {
+    title: '現金殖利率',
+    key: 'yield',
+    render: (_, row) => {
+      const price = parseFloat(row.closing_price);
+      const amount = parseFloat(row.dividend_amount);
+      if (!price) return '-';
+      return `${((amount / price) * 100).toFixed(2)}%`;
+    },
+  },
 ];
 
 const frequencyColors = {
@@ -46,6 +57,7 @@ export default function StockInfo() {
   const [editingBank, setEditingBank] = useState(false);
   const [bankInput, setBankInput] = useState('');
   const [bankSaving, setBankSaving] = useState(false);
+  const [dividendImporting, setDividendImporting] = useState(false);
 
   useEffect(() => {
     fetchETFs();
@@ -78,6 +90,39 @@ export default function StockInfo() {
     }
   };
 
+  const exportDividendExcel = () => {
+    if (!selected?.dividend_records?.length) return;
+    const rows = selected.dividend_records.map(r => {
+      const price = parseFloat(r.closing_price);
+      const amount = parseFloat(r.dividend_amount);
+      const yieldVal = price ? ((amount / price) * 100).toFixed(2) + '%' : '-';
+      return {
+        '除息日': r.ex_dividend_date,
+        '配息金額 (元)': r.dividend_amount,
+        '除息日收盤價 (元)': r.closing_price,
+        '現金殖利率': yieldVal,
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '歷史配息紀錄');
+    XLSX.writeFile(wb, `${selected.securities_code}_${selected.securities_abbreviation}_配息紀錄.xlsx`);
+  };
+
+  const importDividends = async () => {
+    setDividendImporting(true);
+    try {
+      const res = await api.post(`/etfs/${selected.id}/import_dividends/`);
+      message.success(`匯入完成：新增 ${res.data.created} 筆，更新 ${res.data.updated} 筆`);
+      const detail = await api.get(`/etfs/${selected.id}/`);
+      setSelected(detail.data);
+    } catch (err) {
+      message.error(err.response?.data?.error || '匯入失敗');
+    } finally {
+      setDividendImporting(false);
+    }
+  };
+
   const saveBank = async () => {
     setBankSaving(true);
     try {
@@ -98,6 +143,13 @@ export default function StockInfo() {
     { title: '證券簡稱', dataIndex: 'securities_abbreviation', key: 'securities_abbreviation', width: 150 },
     { title: '發行人', dataIndex: 'issuer', key: 'issuer', width: 150 },
     { title: '標的指數', dataIndex: 'target_index', key: 'target_index', ellipsis: true },
+    {
+      title: <span style={{ color: '#ff4d4f' }}>年化現金殖利率</span>,
+      dataIndex: 'annualized_yield',
+      key: 'annualized_yield',
+      width: 140,
+      render: (val) => val != null ? <span style={{ color: '#ff4d4f' }}>{val.toFixed(2)}%</span> : '',
+    },
     { title: '經理費(%)', dataIndex: 'management_fee', key: 'management_fee', width: 100 },
     { title: '保管費(%)', dataIndex: 'custody_fee', key: 'custody_fee', width: 100 },
     {
@@ -200,7 +252,25 @@ export default function StockInfo() {
                   )}
                 </Descriptions.Item>
               </Descriptions>
-              <Title level={5}>歷史配息紀錄</Title>
+              <Space style={{ marginBottom: 8 }}>
+                <Title level={5} style={{ margin: 0 }}>歷史配息紀錄</Title>
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  loading={dividendImporting}
+                  onClick={importDividends}
+                >
+                  匯入歷史配息紀錄
+                </Button>
+                <Button
+                  size="small"
+                  icon={<FileExcelOutlined />}
+                  onClick={exportDividendExcel}
+                  disabled={!selected?.dividend_records?.length}
+                >
+                  下載存成EXCEL檔
+                </Button>
+              </Space>
               <Table
                 dataSource={selected.dividend_records}
                 columns={dividendColumns}
