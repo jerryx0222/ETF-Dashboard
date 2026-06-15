@@ -279,12 +279,22 @@ export default function StockInfo() {
       dataIndex: 'holdings',
       key: 'holdings',
       width: 100,
+      sorter: (a, b) => (a.holdings || 0) - (b.holdings || 0),
       render: (val) => val ? val.toLocaleString() : '-',
     },
     {
       title: '收益(元)',
       key: 'income',
       width: 110,
+      sorter: (a, b) => {
+        const calc = row => {
+          const price = parseFloat(row.latest_price);
+          const holdings = parseInt(row.holdings);
+          const yieldRate = row.annualized_yield;
+          return (price && holdings && yieldRate) ? holdings * price * yieldRate / 100 : 0;
+        };
+        return calc(a) - calc(b);
+      },
       render: (_, row) => {
         const price = parseFloat(row.latest_price);
         const holdings = parseInt(row.holdings);
