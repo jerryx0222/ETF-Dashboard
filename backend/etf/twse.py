@@ -501,10 +501,146 @@ def fetch_latest_price(securities_code):
     return None
 
 
-def fetch_etf_dividends(securities_code, years=10):
+def fetch_moneydj_dividends(securities_code, frequency=None):
+    """MoneyDJ ETF 配息記錄備援抓取（TWSE 無資料時使用）"""
+    import re
+    import requests
+    from datetime import date
+    from bs4 import BeautifulSoup
+
+    _freq_periods = {'monthly': 12, 'quarterly': 4, 'semi_annual': 2, 'annual': 1}
+    periods = _freq_periods.get(frequency) if frequency else None
+
+    url = f"https://www.moneydj.com/ETF/X/Basic/Basic0005.xdjhtm?etfid={securities_code}.TW"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+        "Referer": "https://www.moneydj.com/ETF/X/Default.xdjhtm",
+    }
+
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    resp.encoding = "utf-8"
+    soup = BeautifulSoup(resp.content, "lxml")
+
+    def parse_date(text):
+        text = (text or "").strip()
+        # 西元年 YYYY/MM/DD
+        m = re.match(r"(\d{4})/(\d{1,2})/(\d{1,2})", text)
+        if m:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        # 民國年 YYY/MM/DD (3位)
+        m = re.match(r"(\d{2,3})/(\d{1,2})/(\d{1,2})", text)
+        if m:
+            return date(int(m.group(1)) + 1911, int(m.group(2)), int(m.group(3)))
+        return None
+
+    def clean_float(text):
+        try:
+            return round(float(str(text).replace(",", "").strip()), 4)
+        except (ValueError, TypeError):
+            return None
+
+    results = []
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+
+        header_cells = rows[0].find_all(["th", "td"])
+        header_texts = [c.get_text(strip=True) for c in header_cells]
+
+        # 找含有「除息」或「配息」的表格
+        if not any("除息" in h or "配息" in h or "股利" in h for h in header_texts):
+            continue
+
+        # 判斷各欄位索引
+        date_col = next(
+            (i for i, h in enumerate(header_texts) if "除息" in h and "日" in h), None
+        )
+        amount_col = next(
+            (i for i, h in enumerate(header_texts)
+             if ("配息" in h or "股利" in h or "金額" in h or "每單位" in h) and "日" not in h), None
+        )
+        price_col = next(
+            (i for i, h in enumerate(header_texts) if "收盤" in h), None
+        )
+        yield_col = next(
+            (i for i, h in enumerate(header_texts) if "年化" in h), None
+        )
+
+        if date_col is None or amount_col is None:
+            continue
+
+        for row in rows[1:]:
+            cells = row.find_all(["td", "th"])
+            if len(cells) <= max(c for c in [date_col, amount_col] if c is not None):
+                continue
+
+            ex_date = parse_date(cells[date_col].get_text(strip=True))
+            if not ex_date:
+                continue
+
+            amount = clean_float(cells[amount_col].get_text(strip=True))
+            if amount is None:
+                continue
+
+            closing_price = 0.0
+            if price_col is not None and len(cells) > price_col:
+                closing_price = clean_float(cells[price_col].get_text(strip=True)) or 0.0
+
+            annualized_yield_rate = None
+            if yield_col is not None and len(cells) > yield_col:
+                annualized_yield_rate = clean_float(cells[yield_col].get_text(strip=True))
+
+            results.append({
+                "ex_dividend_date": ex_date,
+                "dividend_amount": amount,
+                "closing_price": closing_price,
+                "annualized_yield_rate": annualized_yield_rate,
+            })
+
+        if results:
+            break  # 找到有效表格即停止
+
+    # 若收盤價為 0，用年化配息率反推：
+    # 公式：年化配息率 = 配息金額 / 除息前一日淨值 × 一年配息次數 × 100
+    # => closing_price = 配息金額 × 一年配息次數 / (年化配息率 / 100)
+    if results and all(r["closing_price"] == 0 for r in results):
+        # 若未傳入 frequency，從資料筆數自動推算
+        if not periods:
+            from collections import Counter
+            year_counts = Counter(r["ex_dividend_date"].year for r in results)
+            typical = sorted(year_counts.values())
+            # 取中位數（避免首尾年份不完整的干擾）
+            mid = typical[len(typical) // 2] if typical else 1
+            if mid >= 10:
+                periods = 12
+            elif mid >= 3:
+                periods = 4
+            elif mid >= 2:
+                periods = 2
+            else:
+                periods = 1
+
+        for r in results:
+            rate = r["annualized_yield_rate"]
+            if rate and rate > 0 and r["dividend_amount"] > 0:
+                r["closing_price"] = round(r["dividend_amount"] * periods / (rate / 100), 2)
+
+    return results
+
+
+def fetch_etf_dividends(securities_code, years=10, frequency=None):
     dividends = _fetch_twse_dividend_dates(securities_code, years)
     if not dividends:
-        return []
+        # TWSE 無資料，改由 MoneyDJ 取得
+        return fetch_moneydj_dividends(securities_code, frequency=frequency)
 
     dates = [d["ex_dividend_date"] for d in dividends]
     price_map = _fetch_twse_prices(securities_code, dates)

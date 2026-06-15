@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(conda env list)",
+      "PowerShell(conda run -n py310 python d:\\\\ETF-Dashboard\\\\backend\\\\manage.py makemigrations etf --name add_annualized_yield_rate)",
+      "PowerShell(conda run -n py310 pip install django-filter djangorestframework 2>&1)",
+      "PowerShell(tail -3)",
+      "PowerShell(conda run -n py310 pip install openpyxl beautifulsoup4 lxml requests 2>&1)",
+      "PowerShell(cd d:\\\\ETF-Dashboard; $body = '{\"username\":\"root\",\"password\":\"rootpassword\"}'; $resp = Invoke-WebRequest -Uri \"http://localhost:8080/api/auth/token/\" -Method POST -Body $body -ContentType \"application/json\"; $token = \\($resp.Content | ConvertFrom-Json\\).access; $etfs = Invoke-WebRequest -Uri \"http://localhost:8080/api/etfs/\" -Headers @{Authorization=\"Bearer $token\"}; Write-Output \"Status: $\\($etfs.StatusCode\\)\"; Write-Output \\($etfs.Content.Substring\\(0, [Math]::Min\\(300, $etfs.Content.Length\\)\\)\\))",
+      "PowerShell(cd d:\\\\ETF-Dashboard; $body = '{\"username\":\"root\",\"password\":\"rootpassword\"}'; $resp = Invoke-WebRequest -Uri \"http://localhost:8080/api/auth/token/\" -Method POST -Body $body -ContentType \"application/json\" -ErrorAction Stop; $token = \\($resp.Content | ConvertFrom-Json\\).access; $etfs = Invoke-WebRequest -Uri \"http://localhost:8080/api/etfs/\" -Headers @{Authorization=\"Bearer $token\"} -ErrorAction Stop; Write-Output \"Status: $\\($etfs.StatusCode\\)\"; Write-Output \\($etfs.Content.Substring\\(0,200\\)\\))",
+      "PowerShell(cd d:\\\\ETF-Dashboard; $resp = Invoke-WebRequest -Uri \"http://localhost:8080/api/etfs/\" -ErrorAction SilentlyContinue; Write-Output \"Status: $\\($resp.StatusCode\\)\")"
+    ]
+  }
+}

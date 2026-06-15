@@ -253,7 +253,11 @@ export default function StockInfo() {
       width: 140,
       sorter: (a, b) => (a.annualized_yield ?? -1) - (b.annualized_yield ?? -1),
       defaultSortOrder: 'descend',
-      render: (val) => val != null ? <span style={{ color: '#ff4d4f' }}>{val.toFixed(2)}%</span> : '',
+      render: (val, row) => {
+        if (val == null) return '';
+        const color = row.annualized_yield_complete ? '#ff4d4f' : 'inherit';
+        return <span style={{ color }}>{val.toFixed(2)}%</span>;
+      },
     },
     { title: '經理費(%)', dataIndex: 'management_fee', key: 'management_fee', width: 100 },
     { title: '保管費(%)', dataIndex: 'custody_fee', key: 'custody_fee', width: 100 },

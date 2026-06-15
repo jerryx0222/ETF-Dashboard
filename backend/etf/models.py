@@ -36,6 +36,7 @@ class DividendRecord(models.Model):
     ex_dividend_date = models.DateField('除息日')
     dividend_amount = models.DecimalField('配息金額(元)', max_digits=10, decimal_places=4)
     closing_price = models.DecimalField('除息日收盤價(元)', max_digits=10, decimal_places=2)
+    annualized_yield_rate = models.DecimalField('年化配息率(%)', max_digits=7, decimal_places=4, null=True, blank=True, default=None)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

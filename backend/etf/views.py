@@ -67,7 +67,7 @@ class ETFViewSet(viewsets.ModelViewSet):
             last_date = last_record.ex_dividend_date if last_record else None
 
             try:
-                records = fetch_etf_dividends(etf.securities_code)
+                records = fetch_etf_dividends(etf.securities_code, frequency=etf.dividend_frequency)
             except Exception as e:
                 errors.append(etf.securities_code)
                 continue
@@ -85,6 +85,7 @@ class ETFViewSet(viewsets.ModelViewSet):
                     defaults={
                         'dividend_amount': rec['dividend_amount'],
                         'closing_price': rec['closing_price'],
+                        'annualized_yield_rate': rec.get('annualized_yield_rate'),
                     },
                 )
                 if was_created:
@@ -102,7 +103,7 @@ class ETFViewSet(viewsets.ModelViewSet):
     def import_dividends(self, request, pk=None):
         etf = self.get_object()
         try:
-            records = fetch_etf_dividends(etf.securities_code)
+            records = fetch_etf_dividends(etf.securities_code, frequency=etf.dividend_frequency)
         except Exception as e:
             msg = str(e)
             if 'rate' in msg.lower() or '429' in msg:
@@ -110,7 +111,7 @@ class ETFViewSet(viewsets.ModelViewSet):
             return Response({'error': msg}, status=status.HTTP_502_BAD_GATEWAY)
 
         if not records:
-            return Response({'error': '未從 TWSE 取得配息資料'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': '未能取得配息資料（TWSE 及 MoneyDJ 均無資料）'}, status=status.HTTP_404_NOT_FOUND)
 
         created, skipped = 0, 0
         for rec in records:
@@ -120,6 +121,7 @@ class ETFViewSet(viewsets.ModelViewSet):
                 defaults={
                     'dividend_amount': rec['dividend_amount'],
                     'closing_price': rec['closing_price'],
+                    'annualized_yield_rate': rec.get('annualized_yield_rate'),
                 },
             )
             if was_created:
