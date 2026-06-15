@@ -461,8 +461,39 @@ def _fetch_twse_prices(securities_code, dates):
     return price_map
 
 
+def _fetch_moneydj_price(securities_code):
+    """從 MoneyDJ Basic0002 頁取得 ETF 最後成交價（TWSE STOCK_DAY 不支援時備援）"""
+    import requests
+    from bs4 import BeautifulSoup
+
+    url = f"https://www.moneydj.com/ETF/X/Basic/Basic0002.xdjhtm?etfid={securities_code}.TW"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "zh-TW,zh;q=0.9",
+        "Referer": "https://www.moneydj.com/ETF/X/Default.xdjhtm",
+    }
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.content, "lxml")
+
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            for i, cell in enumerate(cells):
+                if "最後成交價" in cell and i + 1 < len(cells):
+                    try:
+                        return round(float(cells[i + 1].replace(",", "")), 2)
+                    except (ValueError, TypeError):
+                        pass
+    return None
+
+
 def fetch_latest_price(securities_code):
-    """取得 ETF 最近一個交易日收盤價"""
+    """取得 ETF 最近一個交易日收盤價，TWSE 無資料時改用 MoneyDJ"""
     from datetime import date
     import requests
     import time
@@ -498,6 +529,12 @@ def fetch_latest_price(securities_code):
         except Exception:
             pass
         time.sleep(0.3)
+
+    # TWSE 無資料（如債券 ETF），改由 MoneyDJ 取得
+    try:
+        return _fetch_moneydj_price(securities_code)
+    except Exception:
+        pass
     return None
 
 
